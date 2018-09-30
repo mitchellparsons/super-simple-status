@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>AWS SDK for JavaScript - Sample Application</title>
+  <link href="https://netdna.bootstrapcdn.com/font-awesome/4.0.3/css/font-awesome.min.css" rel="stylesheet" type="text/css" />
+  <link href="https://bootswatch.com/4/sandstone/bootstrap.min.css" rel="stylesheet" type="text/css" />
+  <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.0/umd/popper.min.js" integrity="sha384-cs/chFZiN24E4KMATLdqdvsezGxaGsi4hLGOzlXwp5UZB1LY//20VyM2taTB4QvJ" crossorigin="anonymous"></script>
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.0/js/bootstrap.min.js" integrity="sha384-uefMccjFJAIv6A+rW+L4AHf99KvxDjWSu1z9VI8SKNVmz4sk7buKt/6v9KI65qnm" crossorigin="anonymous"></script>
+  <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1.12.min.js"></script>
+  <style>
+    strong {
+      font-size: 1.7em;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="row">
+      <div class="col-md-8 offset-md-2">
+        <h1 class="text-center">Status Page for MyCompany</h1>
+      </div>
+    </div>
+    <ul id="statusAnchor">
+
+    </ul>
+    <div></div>
+  </div>
+  <script type="text/javascript">
+    var s3 = new AWS.S3()
+    var BUCKET = '<replace s3 bucket>'
+    var services = {}
+    var loop = true
+    var timeoutPeriod = 1000 * 60 // 60 seconds
+
+    function unauthenticatedRequest(operation, params, callback) {
+      var request = s3[operation](params)
+      request.removeListener('validate', AWS.EventListeners.Core.VALIDATE_CREDENTIALS)
+      request.removeListener('sign', AWS.EventListeners.Core.SIGN)
+      request.send(callback)
+    }
+
+    function getListOfServices(cb) {
+      var params = {
+        Bucket: BUCKET,
+        Prefix: 'status/'
+      }
+      unauthenticatedRequest('listObjects', params, function (err, data) {
+        if (err) {
+          console.log('err', err)
+          cb(err)
+        }
+        cb(null, data.Contents.map(function (v) {
+          return v.Key.replace('status/', '')
+        }))
+      })
+    }
+
+    function getStatusForService(service, cb) {
+      var params = {
+        Bucket: BUCKET,
+        Key: "status/" + service
+      }
+      unauthenticatedRequest('getObject', params, function (err, data) {
+        if (err) {
+          console.log('err', err)
+          cb(err)
+        }
+        cb(null, JSON.parse(data.Body.toString()))
+      })
+    }
+
+    function renderStatusForService(service, status) {
+      var stateMap = {
+        'ALARM': 'danger',
+        'OK': 'success',
+        'INSUFFICIENT_DATA': 'warning'
+      }
+      if(!services[service]) {
+        services[service] = {}
+      }
+      if(!services[service].html) {
+        var html = '<li class="row clearfix"><div class="col-md-8 offset-md-2 column">'
+        html += '<div id="' + service +'" class="service d-flex justify-content-between w-100 alert alert-' + stateMap[status.state] +'">'
+        html += '<strong>' + service + '</strong>'
+        html += '<strong id="time">' + (new Date(status.timestamp)).toLocaleString() + '</strong>'
+        html += '</div>'
+        html += '</div></div></li>'
+        services[service].html = $("#statusAnchor").append(html)
+      } else {
+        $('#' + service)
+          .removeClass (function (index, className) {
+            return className.split(' ').find(function(v) { return v.startsWith('alert-')})
+          })
+          .addClass('alert-' + stateMap[status.state])
+          .find('#time').text((new Date(status.timestamp)).toLocaleString())
+      }
+      sortServices();
+    }
+
+    function sortServices() {
+      var mylist = $('#statusAnchor');
+      var listitems = mylist.children('li').get();
+      listitems.sort(function(a, b) {
+        var compA = $(a).find('.service').attr('id').toUpperCase();
+        var compB = $(b).find('.service').attr('id').toUpperCase();
+        return (compA < compB) ? -1 : (compA > compB) ? 1 : 0;
+      })
+      $.each(listitems, function(idx, itm) { mylist.append(itm); });
+    }
+
+    function run() {
+      getListOfServices(function (err, data) {
+        data = data.sort(function(a, b) { 
+          if(a < b) return -1;
+          if(a > b) return 1;
+          return 0;
+        })
+        data.forEach(function (v) {
+          getStatusForService(v, function (err, data) {
+            renderStatusForService(v, data)
+          })
+        })
+        if(loop) {
+          setTimeout(run, timeoutPeriod)
+        }
+      })
+    }
+    run()
+  </script>
+</body>
+
+</html>

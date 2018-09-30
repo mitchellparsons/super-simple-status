@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Parameters:
+  AppName:
+    Type: String
+    Default: simplestatusworker
+  TopicName:
+    Type: String
+    Default: simplestatus
+
+Resources:
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      TopicName: !Ref TopicName
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: PublicRead
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+            AllowedOrigins:
+              - '*'
+    DeletionPolicy: Retain
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - S3Bucket
+    Properties:
+      PolicyDocument:
+        Id: MyPolicy
+        Version: 2012-10-17
+        Statement:
+          - Sid: PublicReadForGetBucketObjects
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Join
+              - ''
+              - - 'arn:aws:s3:::'
+                - !Ref S3Bucket
+                - /*
+      Bucket: !Ref S3Bucket
+
+  LambdaIAMRole:
+    Type: AWS::IAM::Role
+    DependsOn:
+      - S3Bucket
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "lambda.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "LambdaIAMRole"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action: "logs:CreateLogGroup"
+                Resource: !Join ["", ["arn:aws:logs:", !Ref "AWS::Region" ,":", !Ref "AWS::AccountId", ":*"]]
+              - Effect: "Allow"
+                Action:
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: !Join ["", ["arn:aws:logs:", !Ref "AWS::Region" ,":", !Ref "AWS::AccountId",":log-group:/aws/lambda/", !Ref AppName, "*"]]
+              - Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:DeleteObject"
+                Resource: !Join ["", [!GetAtt S3Bucket.Arn, "/*"]]
+
+  StatusWorkerLambda:
+    Type: AWS::Serverless::Function
+    DependsOn:
+      - S3Bucket
+      - SNSTopic
+    Properties:
+      FunctionName: !Ref AppName
+      CodeUri: ./lambda
+      Handler: handler.handle
+      Description: A function for handling SNS notifications
+      Runtime: nodejs8.10
+      MemorySize: 128
+      Timeout: 30
+      Role: !GetAtt LambdaIAMRole.Arn
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref S3Bucket
+      Events:
+        CronEvent:
+          Type: SNS
+          Properties:
+            Topic: !Ref SNSTopic
+
+Outputs:
+  WebsiteURL:
+    Value: !GetAtt
+      - S3Bucket
+      - WebsiteURL
+    Description: URL for website hosted on S3
+  S3Bucket:
+    Value: !Ref S3Bucket
+    Description: URL for website hosted on S3
+  S3BucketSecureURL:
+    Value: !Join
+      - ''
+      - - 'https://'
+        - !GetAtt
+          - S3Bucket
+          - DomainName
+    Description: Name of S3 bucket to hold website content
+  SNSTopic:
+    Value: !Ref SNSTopic
+    Description: SNS Topic for simplestatus
